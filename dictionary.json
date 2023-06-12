@@ -1,0 +1,64 @@
+{
+  "Bowel_Bag": [
+    "bowel_Bag",
+    "bowelbag",
+    "grele"
+  ],
+  "Bladder": [
+    "vessie"
+  ],
+  "Femur_Head_L": [
+    "tete fem g"
+  ],
+  "Femur_Head_R":[
+    "tete fem d"
+  ],
+  "Rectum": [
+    "rectum"
+  ],
+  "Prostate": [
+    "prostate"
+  ],
+  "SeminalVes": [
+    "vs",
+    "vs tot"
+  ],
+  "LymphNodes_L": [
+    "aire iliaque g"
+  ],
+  "LymphNodes_R": [
+    "aire iliaque d",
+    "aire iliaque dte"
+  ],
+  "Proximal_SeminalVes": [
+    "vs proximales"
+  ],
+  "ProstateBed": [
+    "loge prostatique",
+    "loge",
+    "loge prostate"
+  ],
+  "CTV_LN_Pelvic": [
+  ],
+  "CTV_Prostate": [
+  ],
+  "CTV_SeminalVes": [
+  ],
+  "CTV_ProstateBed": [
+  ],
+  "PTVp_7400": [
+  ],
+  "PTVp_7100":[
+  ],
+  "PTVp_6000": [
+  ],
+  "PTVp_6600": [
+  ],
+  "PTVn": [
+  ],
+  "PTVn_6000": [
+  ],
+  "PTVn_5000": [
+  ]
+
+}
