@@ -134,7 +134,8 @@ class Autortp:
         self.test_cases = {}
         self.required_label_map = {'Bladder': 0, 'Rectum': 1, 'Prostate': 2, 'Femur_Head_R': 3, 'Femur_Head_L': 4,
                                    'Bowel_Bag': 5, 'PTVp_7400': 6, 'PTVp_7100': 7, 'PTVp_6000': 8, 'PTVp_6600': 8,
-                                   'PTVn_6000': 9, 'PTVn_5000': 10}
+                                   'PTVn_6000': 9, 'PTVn_5000': 10, 'CTV_Prostate': 11, 'CTV_ProstateBed': 12,
+                                   'CTV_SeminalVes': 13, 'CTV_LN_Pelvic': 14}
 
     def validate(self):
         # This function parses the data to check that we have all that we need
@@ -618,6 +619,16 @@ class Autortp:
             else:
                 case_scores['CTV_Prostate D_min'] = 'n/a'
 
+            if 'CTV_SeminalVes' in organ_dvhs:
+                number_of_targets = number_of_targets + 1
+                dvh = organ_dvhs['CTV_SeminalVes']
+                d_min = np.min(dvh)
+                case_scores['CTV_SeminalVes D_min'] = 1 - min(max((60 - d_min) * 100.0 /
+                                                                  prescribed_dose / 4.0, 0.0), 1.0)
+                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_SeminalVes D_min']
+            else:
+                case_scores['CTV_SeminalVes D_min'] = 'n/a'
+
             if 'PTVp_7400' in organ_dvhs:
                 number_of_targets = number_of_targets + 3
                 dvh = organ_dvhs['PTVp_7400']
@@ -675,7 +686,7 @@ class Autortp:
 
             # The final score should not depend on what is contoured. Either way the consensus will have all the
             # target structures.
-            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 8  # number_of_targets
+            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 9  # number_of_targets
 
             if output_dvh_values:
                 dvh = organ_dvhs['PTVp_7400']
@@ -700,6 +711,16 @@ class Autortp:
                 case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_Prostate D_min']
             else:
                 case_scores['CTV_Prostate D_min'] = 'n/a'
+
+            if 'CTV_SeminalVes' in organ_dvhs:
+                number_of_targets = number_of_targets + 1
+                dvh = organ_dvhs['CTV_SeminalVes']
+                d_min = np.min(dvh)
+                case_scores['CTV_SeminalVes D_min'] = 1 - min(max((60 - d_min) * 100.0 /
+                                                                  prescribed_dose / 4.0, 0.0), 1.0)
+                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_SeminalVes D_min']
+            else:
+                case_scores['CTV_SeminalVes D_min'] = 'n/a'
 
             if 'PTVp_7400' in organ_dvhs:
                 number_of_targets = number_of_targets + 3
@@ -756,6 +777,16 @@ class Autortp:
                 case_scores['PTVp_6000 D_median'] = 'n/a'
                 case_scores['PTVp_6000 D95'] = 'n/a'
 
+            if 'CTV_LN_Pelvic' in organ_dvhs:
+                number_of_targets = number_of_targets + 1
+                dvh = organ_dvhs['CTV_LN_Pelvic']
+                d_min = np.min(dvh)
+                case_scores['CTV_LN_Pelvic D_min'] = 1.0 - min(max((60.0 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0),
+                                                         1.0)
+                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_LN_Pelvic D_min']
+            else:
+                case_scores['CTV_LN_Pelvic D_min'] = 'n/a'
+
             if 'PTVn_6000' in organ_dvhs:
                 number_of_targets = number_of_targets + 2
                 dvh = organ_dvhs['PTVn_6000']
@@ -777,7 +808,7 @@ class Autortp:
 
             # The final score should not depend on what is contoured. Either way the consensus will have all the
             # target structures.
-            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 11  # number_of_targets
+            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 12  # number_of_targets
 
             if output_dvh_values:
                 dvh = organ_dvhs['PTVp_7400']
@@ -797,6 +828,16 @@ class Autortp:
 
         else:  # Prostate Bed + Nodes
             prescribed_dose = 66.0
+            if 'CTV_ProstateBed' in organ_dvhs:
+                number_of_targets = number_of_targets + 1
+                dvh = organ_dvhs['CTV_ProstateBed']
+                d_min = np.min(dvh)
+                case_scores['CTV_ProstateBED D_min'] = 1.0 - min(
+                    max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_ProstateBED D_min']
+            else:
+                case_scores['CTV_ProstateBed D_min'] = 'n/a'
+
             if 'PTVp_6600' in organ_dvhs:
                 number_of_targets = number_of_targets + 3
                 dvh = organ_dvhs['PTVp_6600']
@@ -821,6 +862,16 @@ class Autortp:
                 case_scores['PTVp_6600 D95'] = 'n/a'
                 case_scores['PTVp_6600 D_max'] = 'n/a'
 
+            if 'CTV_LN_Pelvic' in organ_dvhs:
+                number_of_targets = number_of_targets + 1
+                dvh = organ_dvhs['CTV_LN_Pelvic']
+                d_min = np.min(dvh)
+                case_scores['CTV_LN_Pelvic D_min'] = 1.0 - min(max((50.0 - d_min) * 100.0 /
+                                                                   prescribed_dose / 4.0, 0.0), 1.0)
+                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_LN_Pelvic D_min']
+            else:
+                case_scores['CTV_LN_Pelvic D_min'] = 'n/a'
+
             if 'PTVn_5000' in organ_dvhs:
                 number_of_targets = number_of_targets + 2
                 dvh = organ_dvhs['PTVn_5000']
@@ -840,7 +891,7 @@ class Autortp:
 
             # The final score should not depend on what is contoured. Either way the consensus will have all the
             # target structures.
-            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 5  # number_of_targets
+            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 7  # number_of_targets
 
             if output_dvh_values:
                 dvh = organ_dvhs['PTVp_6600']
