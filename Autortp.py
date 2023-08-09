@@ -243,7 +243,7 @@ class Autortp:
                         # this should be a dicom object
                         with open(file_path, "rb") as f:
                             try:
-                                ds = pydcm.dcmread(f)
+                                ds = pydcm.dcmread(f, force=True)
                                 if ds['SOPClassUID'].value == "1.2.840.10008.5.1.4.1.1.481.2":
                                     # RTDOSE SOP Class UID = 1.2.840.10008.5.1.4.1.1.481.2
                                     # Dose should have same FOR to match CT
@@ -634,7 +634,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_7400']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 d_max = np.max(dvh)
                 case_scores['PTVp_7400 D_median'] = 1.0 - min(
                     max(abs((prescribed_dose - d_median) * 100 / prescribed_dose / 1.0), 0.0), 1.0)
@@ -657,7 +659,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_7100_dvh']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 case_scores['PTVp_7100 D_median'] = 1 - min(max((71 - d_median) * 100.0 / prescribed_dose / 1.0,
                                                                 0.0), 1.0)
                 # case_scores['PTVp_7100 D_min'] = 1 - min(max((71 - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
@@ -673,7 +677,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_6000_dvh']
                 d_median = np.median(dvh)  # / 74.0 * 100.0
                 # d_min = np.min(dvh)  # / 74.0 * 100.0
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 case_scores['PTVp_6000 D_median'] = 1 - min(max((60 - d_median) * 100.0 / prescribed_dose / 1.0,
                                                                 0.0), 1.0)
                 # case_scores['PTVp_6000 D_min'] = 1 - min(max((60 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
@@ -727,7 +733,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_7400']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 d_max = np.max(dvh)
                 case_scores['PTVp_7400 D_median'] = 1 - min(
                     max(abs((prescribed_dose - d_median) * 100.0 / prescribed_dose / 1.0), 0.0), 1.0)
@@ -750,7 +758,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_7100_dvh']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 case_scores['PTVp_7100 D_median'] = 1.0 - min(max((71.0 - d_median) * 100.0 / prescribed_dose / 1.0,
                                                                   0.0), 1.0)
                 # case_scores['PTVp_7100 D_min'] = 1 - min(max((71 - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
@@ -766,7 +776,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_6000_dvh']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 case_scores['PTVp_6000 D_median'] = 1.0 - min(max((60.0 - d_median) * 100.0 / prescribed_dose /
                                                                   1.0, 0.0), 1.0)
                 # case_scores['PTVp_6000 D_min'] = 1 - min(max((60 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
@@ -792,7 +804,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVn_6000']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 case_scores['PTVn_6000 D_median'] = 1.0 - min(
                     max((60.0 - d_median) * 100.0 / prescribed_dose / 1.0, 0.0), 1.0)
                 # case_scores['PTVn_6000 D_min'] = 1.0 - min(max((60.0 - d_min) * 100.0 /
@@ -843,7 +857,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVp_6600']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 d_max = np.max(dvh)
                 case_scores['PTVp_6600 D_median'] = 1.0 - min(
                     max(abs((prescribed_dose - d_median) * 100.0 / prescribed_dose / 1.0), 0.0), 1.0)
@@ -877,7 +893,9 @@ class Autortp:
                 dvh = organ_dvhs['PTVn_5000']
                 d_median = np.median(dvh)
                 # d_min = np.min(dvh)
-                d_95 = np.percentile(dvh, 95.0)
+                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                # this actually corresponds to the 5th percentile of the DVH
+                d_95 = np.percentile(dvh, 5.0)
                 case_scores['PTVn_5000 D_median'] = 1 - min(max((50.0 - d_median) * 100.0 / prescribed_dose / 1.0, 0.0),
                                                             1.0)
                 # case_scores['PTVn_5000 D_min'] = 1 - min(max((50.0 - d_min) * 100.0 /
