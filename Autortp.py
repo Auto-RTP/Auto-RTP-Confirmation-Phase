@@ -107,7 +107,7 @@ def get_dvhs(dose_volume, structure_masks):
         mask = structure_masks[struct_name]
         dose_as_array = sITK.GetArrayFromImage(dose_volume)
         mask_as_array = sITK.GetArrayFromImage(mask)
-        if np.sum(mask_as_array)>0:
+        if np.sum(mask_as_array) > 0:
             dose_values = dose_as_array[mask_as_array == 1]
             dose_values.sort()
             organ_dvhs[struct_name] = dose_values
@@ -284,8 +284,10 @@ class Autortp:
                                             ds['ReferencedFrameOfReferenceSequence'].value[0][
                                                 'RTReferencedStudySequence'].value[0][
                                                 'RTReferencedSeriesSequence'].value[0]['SeriesInstanceUID'].value)
-                                elif ds['SOPClassUID'].value == "1.2.840.10008.5.1.4.1.1.481.5":
+                                elif ds['SOPClassUID'].value == "1.2.840.10008.5.1.4.1.1.481.5" or \
+                                        ds['SOPClassUID'].value == "1.2.246.352.70.1.70":
                                     # PLAN SOP Class UID = 1.2.840.10008.5.1.4.1.1.481.5
+                                    # Halycon/Ethos SOP Class UID = 1.2.246.352.70.1.70
                                     # Referenced Structure Set Sequence
                                     #   - Referenced SOP Instance UID to match RTSTRUCT SOP Instance UID
                                     # Frame of Reference UID to match CT
