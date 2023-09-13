@@ -609,7 +609,7 @@ class Autortp:
         # The final score should not depend on what is contoured. Either way the consensus will have all the OARs
         case_scores['OARs'] = case_scores['OARs'] * 10.0 / 5  # number_of_oars
 
-        if case_number in [1, 4, 6, 8, 10, 14]:  # Prostate Only
+        if case_number in [1, 4, 6, 8, 11, 14]:  # Prostate Only
             prescribed_dose = 74.0
             if 'CTV_Prostate' in organ_dvhs:
                 number_of_targets = number_of_targets + 1
