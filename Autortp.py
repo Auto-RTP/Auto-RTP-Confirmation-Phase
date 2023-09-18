@@ -14,6 +14,7 @@ import SimpleITK as sITK
 import skimage
 import score_autocontours_lib
 from pydicom.errors import InvalidDicomError
+import gc
 
 logger = logging.getLogger(__name__)
 
@@ -100,17 +101,29 @@ def subtract_structures(structure_masks, primary_struct_name, struct_to_subtract
             return segmentation
 
 
-def get_dvhs(dose_volume, structure_masks):
+def get_dvhs(dose_volume, structure_masks, only_struct_name=None):
     # organ_dvhs = self.get_dvhs(resampled_dose, gt_structs)
     organ_dvhs = {}
-    for struct_name in structure_masks:
-        mask = structure_masks[struct_name]
-        dose_as_array = sITK.GetArrayFromImage(dose_volume)
-        mask_as_array = sITK.GetArrayFromImage(mask)
-        if np.sum(mask_as_array) > 0:
-            dose_values = dose_as_array[mask_as_array == 1]
-            dose_values.sort()
-            organ_dvhs[struct_name] = dose_values
+    if only_struct_name is None:
+        for struct_name in structure_masks:
+            mask = structure_masks[struct_name]
+            dose_as_array = sITK.GetArrayFromImage(dose_volume)
+            mask_as_array = sITK.GetArrayFromImage(mask)
+            if np.sum(mask_as_array) > 0:
+                dose_values = dose_as_array[mask_as_array == 1]
+                dose_values.sort()
+                organ_dvhs[struct_name] = dose_values
+    else:
+        struct_name = only_struct_name
+        if struct_name in structure_masks:
+            mask = structure_masks[struct_name]
+            dose_as_array = sITK.GetArrayFromImage(dose_volume)
+            mask_as_array = sITK.GetArrayFromImage(mask)
+            if np.sum(mask_as_array) > 0:
+                dose_values = dose_as_array[mask_as_array == 1]
+                dose_values.sort()
+                organ_dvhs[struct_name] = dose_values
+
     return organ_dvhs
 
 
@@ -120,7 +133,7 @@ class Autortp:
             # Running on my machine locally
             local_path = os.path.dirname(os.path.abspath(__file__))
             self.ground_truth_path = os.path.join(local_path, "ground-truth")
-            self.predictions_path = os.path.join(local_path, "..", "test")
+            self.predictions_path = os.path.join(local_path, "..", "test-data-confirm")
         else:
             # Running on the grand challenges docker
             self.ground_truth_path = Path("./ground-truth")
@@ -130,12 +143,40 @@ class Autortp:
         self.output_path = "../../output"
         self.output_file = "../../output/metrics.json"
         self.number_of_cases = 3  # TODO This failed on me as I have to manually update it. Can I do that automatically?
+        self.first_case = 1
         self.ground_truth_cases = {}
         self.test_cases = {}
-        self.required_label_map = {'Bladder': 0, 'Rectum': 1, 'Prostate': 2, 'Femur_Head_R': 3, 'Femur_Head_L': 4,
-                                   'Bowel_Bag': 5, 'PTVp_7400': 6, 'PTVp_7100': 7, 'PTVp_6000': 8, 'PTVp_6600': 8,
-                                   'PTVn_6000': 9, 'PTVn_5000': 10, 'CTV_Prostate': 11, 'CTV_ProstateBed': 12,
-                                   'CTV_SeminalVes': 13, 'CTV_LN_Pelvic': 14}
+        self.required_label_map = {}
+        self.case_numbers = {}
+        self.case_types = {1: 'Prostate',
+                           2: 'Prostate + Nodes',
+                           3: 'Prostate Bed',
+                           4: 'Prostate',
+                           5: 'Prostate + Nodes',
+                           6: 'Prostate',
+                           7: 'Prostate + Nodes',
+                           8: 'Prostate',
+                           9: 'Prostate + Nodes',
+                           10: 'Prostate Bed',
+                           11: 'Prostate',
+                           12: 'Prostate + Nodes',
+                           13: 'Prostate Bed',
+                           14: 'Prostate',
+                           15: 'Prostate + Nodes',
+                           16: 'Prostate Bed'}
+        self.case_numbers['Prostate'] = [1, 4, 6, 8, 11, 14]
+        self.case_numbers['Prostate + Nodes'] = [2, 5, 7, 9, 12, 15]
+        self.case_numbers['Prostate Bed'] = [3, 10, 13, 16]
+        self.required_label_map['Prostate'] = {'Bladder': 0, 'Rectum': 1, 'Prostate': 2, 'Femur_Head_R': 3,
+                                               'Femur_Head_L': 4, 'Bowel_Bag': 5, 'PTVp_7400': 6, 'PTVp_7100': 7,
+                                               'PTVp_6000': 8, 'CTV_Prostate': 12, 'CTV_SeminalVes': 14}
+        self.required_label_map['Prostate + Nodes'] = {'Bladder': 0, 'Rectum': 1, 'Prostate': 2, 'Femur_Head_R': 3,
+                                                       'Femur_Head_L': 4, 'Bowel_Bag': 5, 'PTVp_7400': 6,
+                                                       'PTVp_7100': 7, 'PTVp_6000': 8, 'PTVn_6000': 10,
+                                                       'CTV_Prostate': 12, 'CTV_SeminalVes': 14, 'CTV_LN_Pelvic': 15}
+        self.required_label_map['Prostate Bed'] = {'Bladder': 0, 'Rectum': 1, 'Femur_Head_R': 3, 'Femur_Head_L': 4,
+                                                   'Bowel_Bag': 5, 'PTVp_6600': 8, 'PTVn_5000': 11,
+                                                   'CTV_ProstateBed': 13, 'CTV_LN_Pelvic': 15}
 
     def validate(self):
         # This function parses the data to check that we have all that we need
@@ -156,7 +197,7 @@ class Autortp:
         # We are going to assume this data is structured correctly in folders as
         # this is the data we are creating. Will be one folder per case, containing
         # one folder for the image and one RTSS.dcm file.
-        for i in range(1, self.number_of_cases + 1):
+        for i in range(self.first_case, self.first_case + self.number_of_cases):
             case_name = "AUTO-RTP Case {:02d}".format(i)
             case = {
                 'number': i,
@@ -419,8 +460,9 @@ class Autortp:
 
     def score_case(self, case_number, contour_set=0):
 
-        # TODO: Nasty hardcoded debugging
         output_dvh_values = False
+
+        case_type = self.case_types[case_number]
 
         # This method scores each individual case
         print("Scoring case: {}".format(case_number))
@@ -429,516 +471,554 @@ class Autortp:
         ct_volume = self.load_ct(case_number)
         dose_volume = self.load_dose(case_number)
         resampled_dose = sITK.Resample(dose_volume, ct_volume, sITK.Transform(), sITK.sitkLinear, 0)
+        # Dose volume isn't used after this, so we can free up the memory
+        dose_volume = None
+        gc.collect()
+
         # test segmentations are not used for scoring dose
         # contour measures will be calculated from the RTSS
         # test_structs = self.load_rtstructs(case_number, ct_volume, self.required_label_map, test=True)
         if contour_set >= 0:
-            gt_structs = self.load_rtstructs(case_number, ct_volume, self.required_label_map,
+            gt_structs = self.load_rtstructs(case_number, ct_volume, self.required_label_map[case_type],
                                              test=False, expert=contour_set, rename=True)
         else:
-            gt_structs = self.load_rtstructs(case_number, ct_volume, self.required_label_map,
+            gt_structs = self.load_rtstructs(case_number, ct_volume, self.required_label_map[case_type],
                                              test=True, rename=True)
 
-        # Renaming structures according to dictionary should be done by the loading function
-        # gt_structs = rename_structures(gt_structs, self.dictionary)
+        if gt_structs is not None:
+            ct_resolution = ct_volume.GetSpacing()
+            voxel_volume_in_cc = (ct_resolution[0] * ct_resolution[1] * ct_resolution[2]) / 1000
 
-        ct_resolution = ct_volume.GetSpacing()
-        voxel_volume_in_cc = (ct_resolution[0] * ct_resolution[1] * ct_resolution[2]) / 1000
+            # Do boolean operations on the PTVs, so we measure the DVH against the right objects
+            if case_number in self.case_numbers['Prostate'] or case_number in self.case_numbers['Prostate + Nodes']:  #[1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15]:
+                gt_structs["PTVp_7100_dvh"] = subtract_structures(gt_structs, "PTVp_7100", "PTVp_7400", "PTVp_7100_dvh",
+                                                                  ct_volume)
+                gt_structs["PTVp_6000_dvh"] = subtract_structures(gt_structs, "PTVp_6000", "PTVp_7100", "PTVp_6000_dvh",
+                                                                  ct_volume)
 
-        # Do boolean operations on the PTVs so we measure the DVH against the right objects
-        if case_number in [1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15]:
-            gt_structs["PTVp_7100_dvh"] = subtract_structures(gt_structs, "PTVp_7100", "PTVp_7400", "PTVp_7100_dvh",
-                                                              ct_volume)
-            gt_structs["PTVp_6000_dvh"] = subtract_structures(gt_structs, "PTVp_6000", "PTVp_7100", "PTVp_6000_dvh",
-                                                              ct_volume)
+            # We are going to compute DVHs as needed to reduce memory usage
+            # organ_dvhs = get_dvhs(resampled_dose, gt_structs)
 
-        organ_dvhs = get_dvhs(resampled_dose, gt_structs)
-        # This is nasty coding. Ideally the constraints and objectives would all be read from a file
-        # but for the sake of speed of implementation, this is just hard-coded for now
+            # This is nasty coding. Ideally the constraints and objectives would all be read from a file
+            # but for the sake of speed of implementation, this is just hard-coded for now
 
-        number_of_oars = 0.0
-        case_scores['OARs'] = 0.0
-        number_of_targets = 0.0
-        case_scores['Targets'] = 0.0
+            number_of_oars = 0.0
+            case_scores['OARs'] = 0.0
+            number_of_targets = 0.0
+            case_scores['Targets'] = 0.0
 
-        # Bowel_Bag
-        if 'Bowel_Bag' in organ_dvhs:
-            number_of_oars = number_of_oars + 1
-            dvh = organ_dvhs['Bowel_Bag']
-            # V45 Optimal 78cc Mandatory 158cc
-            # v45 = len(dvh[dvh >= 45]) / len(dvh)
-            vol_in_cc_v45 = len(dvh[dvh >= 45]) * voxel_volume_in_cc
-            case_scores['Bowel_Bag v45'] = min(max((158.0 - vol_in_cc_v45) / 80.0, 0.0), 1.0)
-            # V50 Optimal 17cc Mandatory 110cc
-            # v50 = len(dvh[dvh >= 50]) / len(dvh)
-            vol_in_cc_v50 = len(dvh[dvh >= 50]) * voxel_volume_in_cc
-            case_scores['Bowel_Bag v50'] = min(max((110.0 - vol_in_cc_v50) / 93.0, 0.0), 1.0)
-            # V55 Optimal 14cc Mandatory 28cc
-            # v55 = len(dvh[dvh >= 55]) / len(dvh)
-            vol_in_cc_v55 = len(dvh[dvh >= 55]) * voxel_volume_in_cc
-            case_scores['Bowel_Bag v55'] = min(max((28.0 - vol_in_cc_v55) / 14.0, 0.0), 1.0)
-            # V60 Optimal 0.5cc Mandatory 6cc
-            # v60 = len(dvh[dvh >= 60]) / len(dvh)
-            vol_in_cc_v60 = len(dvh[dvh >= 60]) * voxel_volume_in_cc
-            case_scores['Bowel_Bag v60'] = min(max((6.0 - vol_in_cc_v60) / 5.5, 0.0), 1.0)
-            # V65 Optimal 0cc Mandatory 0.5cc
-            # v65 = len(dvh[dvh >= 65]) / len(dvh)
-            vol_in_cc_v65 = len(dvh[dvh >= 65]) * voxel_volume_in_cc
-            case_scores['Bowel_Bag v65'] = min(max((0.5 - vol_in_cc_v65) / 0.5, 0.0), 1.0)
-            case_scores['Bowel_Bag'] = (case_scores['Bowel_Bag v45'] + case_scores['Bowel_Bag v50'] +
-                                        case_scores['Bowel_Bag v55'] + case_scores['Bowel_Bag v60'] +
-                                        case_scores['Bowel_Bag v65'])
-            case_scores['OARs'] = case_scores['OARs'] + case_scores['Bowel_Bag']
+            # Bowel_Bag
+            organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'Bowel_Bag')
+            if 'Bowel_Bag' in organ_dvhs:
+                number_of_oars = number_of_oars + 1
+                dvh = organ_dvhs['Bowel_Bag']
+                # V45 Optimal 78cc Mandatory 158cc
+                # v45 = len(dvh[dvh >= 45]) / len(dvh)
+                vol_in_cc_v45 = len(dvh[dvh >= 45]) * voxel_volume_in_cc
+                case_scores['Bowel_Bag v45'] = min(max((158.0 - vol_in_cc_v45) / 80.0, 0.0), 1.0)
+                # V50 Optimal 17cc Mandatory 110cc
+                # v50 = len(dvh[dvh >= 50]) / len(dvh)
+                vol_in_cc_v50 = len(dvh[dvh >= 50]) * voxel_volume_in_cc
+                case_scores['Bowel_Bag v50'] = min(max((110.0 - vol_in_cc_v50) / 93.0, 0.0), 1.0)
+                # V55 Optimal 14cc Mandatory 28cc
+                # v55 = len(dvh[dvh >= 55]) / len(dvh)
+                vol_in_cc_v55 = len(dvh[dvh >= 55]) * voxel_volume_in_cc
+                case_scores['Bowel_Bag v55'] = min(max((28.0 - vol_in_cc_v55) / 14.0, 0.0), 1.0)
+                # V60 Optimal 0.5cc Mandatory 6cc
+                # v60 = len(dvh[dvh >= 60]) / len(dvh)
+                vol_in_cc_v60 = len(dvh[dvh >= 60]) * voxel_volume_in_cc
+                case_scores['Bowel_Bag v60'] = min(max((6.0 - vol_in_cc_v60) / 5.5, 0.0), 1.0)
+                # V65 Optimal 0cc Mandatory 0.5cc
+                # v65 = len(dvh[dvh >= 65]) / len(dvh)
+                vol_in_cc_v65 = len(dvh[dvh >= 65]) * voxel_volume_in_cc
+                case_scores['Bowel_Bag v65'] = min(max((0.5 - vol_in_cc_v65) / 0.5, 0.0), 1.0)
+                case_scores['Bowel_Bag'] = (case_scores['Bowel_Bag v45'] + case_scores['Bowel_Bag v50'] +
+                                            case_scores['Bowel_Bag v55'] + case_scores['Bowel_Bag v60'] +
+                                            case_scores['Bowel_Bag v65'])
+                case_scores['OARs'] = case_scores['OARs'] + case_scores['Bowel_Bag']
 
-            if output_dvh_values:
-                case_scores['Bowel_Bag v45'] = vol_in_cc_v45
-                case_scores['Bowel_Bag v50'] = vol_in_cc_v50
-                case_scores['Bowel_Bag v55'] = vol_in_cc_v55
-                case_scores['Bowel_Bag v60'] = vol_in_cc_v60
-                case_scores['Bowel_Bag v65'] = vol_in_cc_v65
-        else:
-            case_scores['Bowel_Bag v45'] = 'n/a'
-            case_scores['Bowel_Bag v50'] = 'n/a'
-            case_scores['Bowel_Bag v55'] = 'n/a'
-            case_scores['Bowel_Bag v60'] = 'n/a'
-            case_scores['Bowel_Bag v65'] = 'n/a'
-            case_scores['Bowel_Bag'] = 'n/a'
-
-        # Rectum
-        if 'Rectum' in organ_dvhs:
-            number_of_oars = number_of_oars + 1
-            dvh = organ_dvhs['Rectum']
-            # V50 Optimal 50% Mandatory 60%
-            v50 = len(dvh[dvh >= 50]) / len(dvh)
-            case_scores['Rectum v50'] = min(max((0.6 - v50) / 0.1, 0.0), 1.0)
-            # V60 Optimal 35% Mandatory 50%
-            v60 = len(dvh[dvh >= 60]) / len(dvh)
-            case_scores['Rectum v60'] = min(max((0.5 - v60) / 0.15, 0.0), 1.0)
-            # V65 Optimal 25% Mandatory 30%
-            v65 = len(dvh[dvh >= 65]) / len(dvh)
-            case_scores['Rectum v65'] = min(max((0.3 - v65) / 0.05, 0.0), 1.0)
-            # V70 Optimal 10% Mandatory 15%
-            v70 = len(dvh[dvh >= 70]) / len(dvh)
-            case_scores['Rectum v70'] = min(max((0.15 - v70) / 0.05, 0.0), 1.0)
-            # V75 Optimal 3% Mandatory 5%
-            v75 = len(dvh[dvh >= 75]) / len(dvh)
-            case_scores['Rectum v75'] = min(max((0.05 - v75) / 0.02, 0.0), 1.0)
-            case_scores['Rectum'] = (case_scores['Rectum v50'] + case_scores['Rectum v60'] +
-                                     case_scores['Rectum v65'] + case_scores['Rectum v70'] +
-                                     case_scores['Rectum v75'])
-            case_scores['OARs'] = case_scores['OARs'] + case_scores['Rectum']
-
-            if output_dvh_values:
-                case_scores['Rectum v50'] = v50
-                case_scores['Rectum v60'] = v60
-                case_scores['Rectum v65'] = v65
-                case_scores['Rectum v70'] = v70
-                case_scores['Rectum v75'] = v75
-        else:
-            case_scores['Rectum v50'] = 'n/a'
-            case_scores['Rectum v60'] = 'n/a'
-            case_scores['Rectum v65'] = 'n/a'
-            case_scores['Rectum v70'] = 'n/a'
-            case_scores['Rectum v75'] = 'n/a'
-            case_scores['Rectum'] = 'n/a'
-
-        # Bladder
-        if 'Bladder' in organ_dvhs:
-            number_of_oars = number_of_oars + 1
-            dvh = organ_dvhs['Bladder']
-            # V50 Optimal 50% Mandatory 100%
-            v50 = len(dvh[dvh >= 50]) / len(dvh)
-            case_scores['Bladder v50'] = min(max((1.0 - v50) / 0.5, 0.0), 1.0)
-            # V60 Optimal 25% Mandatory 100%
-            v60 = len(dvh[dvh >= 60]) / len(dvh)
-            case_scores['Bladder v60'] = min(max((1.0 - v60) / 0.75, 0.0), 1.0)
-            # V65 Optimal 10% Mandatory 50%
-            v65 = len(dvh[dvh >= 65]) / len(dvh)
-            case_scores['Bladder v65'] = min(max((0.5 - v65) / 0.4, 0.0), 1.0)
-            # V70 Optimal 5% Mandatory 35%
-            v70 = len(dvh[dvh >= 70]) / len(dvh)
-            case_scores['Bladder v70'] = min(max((0.35 - v70) / 0.3, 0.0), 1.0)
-            case_scores['Bladder'] = (case_scores['Bladder v50'] + case_scores['Bladder v60'] +
-                                      case_scores['Bladder v65'] + 2 * case_scores['Bladder v70'])
-            case_scores['OARs'] = case_scores['OARs'] + case_scores['Bladder']
-
-            if output_dvh_values:
-                case_scores['Bladder v50'] = v50
-                case_scores['Bladder v60'] = v60
-                case_scores['Bladder v65'] = v65
-                case_scores['Bladder v70'] = v70
-        else:
-            case_scores['Bladder v50'] = 'n/a'
-            case_scores['Bladder v60'] = 'n/a'
-            case_scores['Bladder v65'] = 'n/a'
-            case_scores['Bladder v70'] = 'n/a'
-            case_scores['Bladder'] = 'n/a'
-
-        # Femoral Head Left
-        if 'Femur_Head_L' in organ_dvhs:
-            number_of_oars = number_of_oars + 1
-            dvh = organ_dvhs['Femur_Head_L']
-            # V50 Optimal 5% Mandatory 25%
-            v50 = len(dvh[dvh >= 50]) / len(dvh)
-            case_scores['Femur_Head_L v50'] = min(max((0.25 - v50) / 0.2, 0.0), 1.0)
-            case_scores['Femur_Head_L'] = 5 * case_scores['Femur_Head_L v50']
-            case_scores['OARs'] = case_scores['OARs'] + case_scores['Femur_Head_L']
-
-            if output_dvh_values:
-                case_scores['Femur_Head_L v50'] = v50
-        else:
-            case_scores['Femur_Head_L v50'] = 'n/a'
-            case_scores['Femur_Head_L'] = 'n/a'
-
-        # Femoral Head Right
-        if 'Femur_Head_R' in organ_dvhs:
-            number_of_oars = number_of_oars + 1
-            dvh = organ_dvhs['Femur_Head_R']
-            # V50 Optimal 5% Mandatory 25%
-            v50 = len(dvh[dvh >= 50]) / len(dvh)
-            case_scores['Femur_Head_R v50'] = min(max((0.25 - v50) / 0.2, 0.0), 1.0)
-            case_scores['Femur_Head_R'] = 5 * case_scores['Femur_Head_R v50']
-            case_scores['OARs'] = case_scores['OARs'] + case_scores['Femur_Head_R']
-
-            if output_dvh_values:
-                case_scores['Femur_Head_R v50'] = v50
-        else:
-            case_scores['Femur_Head_R v50'] = 'n/a'
-            case_scores['Femur_Head_R'] = 'n/a'
-
-        # The final score should not depend on what is contoured. Either way the consensus will have all the OARs
-        case_scores['OARs'] = case_scores['OARs'] * 10.0 / 5  # number_of_oars
-
-        if case_number in [1, 4, 6, 8, 10, 14]:  # Prostate Only
-            prescribed_dose = 74.0
-            if 'CTV_Prostate' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_Prostate']
-                d_min = np.min(dvh)
-                case_scores['CTV_Prostate D_min'] = 1.0 - min(
-                    max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_Prostate D_min']
+                if output_dvh_values:
+                    case_scores['Bowel_Bag v45'] = vol_in_cc_v45
+                    case_scores['Bowel_Bag v50'] = vol_in_cc_v50
+                    case_scores['Bowel_Bag v55'] = vol_in_cc_v55
+                    case_scores['Bowel_Bag v60'] = vol_in_cc_v60
+                    case_scores['Bowel_Bag v65'] = vol_in_cc_v65
             else:
-                case_scores['CTV_Prostate D_min'] = 'n/a'
+                case_scores['Bowel_Bag v45'] = 'n/a'
+                case_scores['Bowel_Bag v50'] = 'n/a'
+                case_scores['Bowel_Bag v55'] = 'n/a'
+                case_scores['Bowel_Bag v60'] = 'n/a'
+                case_scores['Bowel_Bag v65'] = 'n/a'
+                case_scores['Bowel_Bag'] = 'n/a'
 
-            if 'CTV_SeminalVes' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_SeminalVes']
-                d_min = np.min(dvh)
-                case_scores['CTV_SeminalVes D_min'] = 1 - min(max((60 - d_min) * 100.0 /
-                                                                  prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_SeminalVes D_min']
+            # Rectum
+            organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'Rectum')
+            if 'Rectum' in organ_dvhs:
+                number_of_oars = number_of_oars + 1
+                dvh = organ_dvhs['Rectum']
+                # V50 Optimal 50% Mandatory 60%
+                v50 = len(dvh[dvh >= 50]) / len(dvh)
+                case_scores['Rectum v50'] = min(max((0.6 - v50) / 0.1, 0.0), 1.0)
+                # V60 Optimal 35% Mandatory 50%
+                v60 = len(dvh[dvh >= 60]) / len(dvh)
+                case_scores['Rectum v60'] = min(max((0.5 - v60) / 0.15, 0.0), 1.0)
+                # V65 Optimal 25% Mandatory 30%
+                v65 = len(dvh[dvh >= 65]) / len(dvh)
+                case_scores['Rectum v65'] = min(max((0.3 - v65) / 0.05, 0.0), 1.0)
+                # V70 Optimal 10% Mandatory 15%
+                v70 = len(dvh[dvh >= 70]) / len(dvh)
+                case_scores['Rectum v70'] = min(max((0.15 - v70) / 0.05, 0.0), 1.0)
+                # V75 Optimal 3% Mandatory 5%
+                v75 = len(dvh[dvh >= 75]) / len(dvh)
+                case_scores['Rectum v75'] = min(max((0.05 - v75) / 0.02, 0.0), 1.0)
+                case_scores['Rectum'] = (case_scores['Rectum v50'] + case_scores['Rectum v60'] +
+                                         case_scores['Rectum v65'] + case_scores['Rectum v70'] +
+                                         case_scores['Rectum v75'])
+                case_scores['OARs'] = case_scores['OARs'] + case_scores['Rectum']
+
+                if output_dvh_values:
+                    case_scores['Rectum v50'] = v50
+                    case_scores['Rectum v60'] = v60
+                    case_scores['Rectum v65'] = v65
+                    case_scores['Rectum v70'] = v70
+                    case_scores['Rectum v75'] = v75
             else:
-                case_scores['CTV_SeminalVes D_min'] = 'n/a'
+                case_scores['Rectum v50'] = 'n/a'
+                case_scores['Rectum v60'] = 'n/a'
+                case_scores['Rectum v65'] = 'n/a'
+                case_scores['Rectum v70'] = 'n/a'
+                case_scores['Rectum v75'] = 'n/a'
+                case_scores['Rectum'] = 'n/a'
 
-            if 'PTVp_7400' in organ_dvhs:
-                number_of_targets = number_of_targets + 3
-                dvh = organ_dvhs['PTVp_7400']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                d_max = np.max(dvh)
-                case_scores['PTVp_7400 D_median'] = 1.0 - min(
-                    max(abs((prescribed_dose - d_median) * 100 / prescribed_dose / 1.0), 0.0), 1.0)
-                # case_scores['PTVp_7400 D_min'] = 1.0 - min(max((prescribed_dose - d_min) * 100.0 /
-                # prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_7400 D95'] = 1.0 - min(
-                    max((prescribed_dose - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_7400 D_max'] = 1.0 - min(
-                    max((d_max - prescribed_dose) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D95']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_max']
+            # Bladder
+            organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'Bladder')
+            if 'Bladder' in organ_dvhs:
+                number_of_oars = number_of_oars + 1
+                dvh = organ_dvhs['Bladder']
+                # V50 Optimal 50% Mandatory 100%
+                v50 = len(dvh[dvh >= 50]) / len(dvh)
+                case_scores['Bladder v50'] = min(max((1.0 - v50) / 0.5, 0.0), 1.0)
+                # V60 Optimal 25% Mandatory 100%
+                v60 = len(dvh[dvh >= 60]) / len(dvh)
+                case_scores['Bladder v60'] = min(max((1.0 - v60) / 0.75, 0.0), 1.0)
+                # V65 Optimal 10% Mandatory 50%
+                v65 = len(dvh[dvh >= 65]) / len(dvh)
+                case_scores['Bladder v65'] = min(max((0.5 - v65) / 0.4, 0.0), 1.0)
+                # V70 Optimal 5% Mandatory 35%
+                v70 = len(dvh[dvh >= 70]) / len(dvh)
+                case_scores['Bladder v70'] = min(max((0.35 - v70) / 0.3, 0.0), 1.0)
+                case_scores['Bladder'] = (case_scores['Bladder v50'] + case_scores['Bladder v60'] +
+                                          case_scores['Bladder v65'] + 2 * case_scores['Bladder v70'])
+                case_scores['OARs'] = case_scores['OARs'] + case_scores['Bladder']
+
+                if output_dvh_values:
+                    case_scores['Bladder v50'] = v50
+                    case_scores['Bladder v60'] = v60
+                    case_scores['Bladder v65'] = v65
+                    case_scores['Bladder v70'] = v70
             else:
-                case_scores['PTVp_7400 D_median'] = 'n/a'
-                case_scores['PTVp_7400 D95'] = 'n/a'
-                case_scores['PTVp_7400 D_max'] = 'n/a'
+                case_scores['Bladder v50'] = 'n/a'
+                case_scores['Bladder v60'] = 'n/a'
+                case_scores['Bladder v65'] = 'n/a'
+                case_scores['Bladder v70'] = 'n/a'
+                case_scores['Bladder'] = 'n/a'
 
-            if 'PTVp_7100_dvh' in organ_dvhs:
-                number_of_targets = number_of_targets + 2
-                dvh = organ_dvhs['PTVp_7100_dvh']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                case_scores['PTVp_7100 D_median'] = 1 - min(max((71 - d_median) * 100.0 / prescribed_dose / 1.0,
-                                                                0.0), 1.0)
-                # case_scores['PTVp_7100 D_min'] = 1 - min(max((71 - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_7100 D95'] = 1 - min(max((71 - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D95']
+            # Femoral Head Left
+            organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'Femur_Head_L')
+            if 'Femur_Head_L' in organ_dvhs:
+                number_of_oars = number_of_oars + 1
+                dvh = organ_dvhs['Femur_Head_L']
+                # V50 Optimal 5% Mandatory 25%
+                v50 = len(dvh[dvh >= 50]) / len(dvh)
+                case_scores['Femur_Head_L v50'] = min(max((0.25 - v50) / 0.2, 0.0), 1.0)
+                case_scores['Femur_Head_L'] = 5 * case_scores['Femur_Head_L v50']
+                case_scores['OARs'] = case_scores['OARs'] + case_scores['Femur_Head_L']
+
+                if output_dvh_values:
+                    case_scores['Femur_Head_L v50'] = v50
             else:
-                case_scores['PTVp_7100 D_median'] = 'n/a'
-                case_scores['PTVp_7100 D95'] = 'n/a'
+                case_scores['Femur_Head_L v50'] = 'n/a'
+                case_scores['Femur_Head_L'] = 'n/a'
 
-            if 'PTVp_6000_dvh' in organ_dvhs:
-                number_of_targets = number_of_targets + 2
-                dvh = organ_dvhs['PTVp_6000_dvh']
-                d_median = np.median(dvh)  # / 74.0 * 100.0
-                # d_min = np.min(dvh)  # / 74.0 * 100.0
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                case_scores['PTVp_6000 D_median'] = 1 - min(max((60 - d_median) * 100.0 / prescribed_dose / 1.0,
-                                                                0.0), 1.0)
-                # case_scores['PTVp_6000 D_min'] = 1 - min(max((60 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['PTVp_6000 D95'] = 1 - min(max((60 - d_95) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D95']
+            # Femoral Head Right
+            organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'Femur_Head_R')
+            if 'Femur_Head_R' in organ_dvhs:
+                number_of_oars = number_of_oars + 1
+                dvh = organ_dvhs['Femur_Head_R']
+                # V50 Optimal 5% Mandatory 25%
+                v50 = len(dvh[dvh >= 50]) / len(dvh)
+                case_scores['Femur_Head_R v50'] = min(max((0.25 - v50) / 0.2, 0.0), 1.0)
+                case_scores['Femur_Head_R'] = 5 * case_scores['Femur_Head_R v50']
+                case_scores['OARs'] = case_scores['OARs'] + case_scores['Femur_Head_R']
+
+                if output_dvh_values:
+                    case_scores['Femur_Head_R v50'] = v50
             else:
-                case_scores['PTVp_6000 D_median'] = 'n/a'
-                case_scores['PTVp_6000 D95'] = 'n/a'
+                case_scores['Femur_Head_R v50'] = 'n/a'
+                case_scores['Femur_Head_R'] = 'n/a'
 
-            # The final score should not depend on what is contoured. Either way the consensus will have all the
-            # target structures.
-            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 9  # number_of_targets
+            # The final score should not depend on what is contoured. Either way the consensus will have all the OARs
+            case_scores['OARs'] = case_scores['OARs'] * 10.0 / 5  # number_of_oars
 
-            if output_dvh_values:
-                dvh = organ_dvhs['PTVp_7400']
-                case_scores['PTVp_7400 D_median'] = np.median(dvh)
-                case_scores['PTVp_7400 D_min'] = np.min(dvh)
-                case_scores['PTVp_7400 D_max'] = np.max(dvh)
-                dvh = organ_dvhs['PTVp_7100_dvh']
-                case_scores['PTVp_7100 D_median'] = np.median(dvh)
-                case_scores['PTVp_7100 D_min'] = np.min(dvh)
-                dvh = organ_dvhs['PTVp_6000_dvh']
-                case_scores['PTVp_6000 D_median'] = np.median(dvh)
-                case_scores['PTVp_6000 D_min'] = np.min(dvh)
+            if case_number in self.case_numbers['Prostate']:  #[1, 4, 6, 8, 10, 14]:  # Prostate Only
+                prescribed_dose = 74.0
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_Prostate')
+                if 'CTV_Prostate' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_Prostate']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_Prostate D_min'] = 1.0 - min(
+                        max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_Prostate D_min']
+                else:
+                    case_scores['CTV_Prostate D_min'] = 'n/a'
 
-        elif case_number in [2, 5, 7, 9, 12, 15]:  # Prostate + nodes
-            prescribed_dose = 74.0
-            if 'CTV_Prostate' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_Prostate']
-                d_min = np.min(dvh)
-                case_scores['CTV_Prostate D_min'] = 1.0 - min(
-                    max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_Prostate D_min']
-            else:
-                case_scores['CTV_Prostate D_min'] = 'n/a'
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_SeminalVes')
+                if 'CTV_SeminalVes' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_SeminalVes']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_SeminalVes D_min'] = 1 - min(max((60 - d_min) * 100.0 /
+                                                                      prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_SeminalVes D_min']
+                else:
+                    case_scores['CTV_SeminalVes D_min'] = 'n/a'
 
-            if 'CTV_SeminalVes' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_SeminalVes']
-                d_min = np.min(dvh)
-                case_scores['CTV_SeminalVes D_min'] = 1 - min(max((60 - d_min) * 100.0 /
-                                                                  prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_SeminalVes D_min']
-            else:
-                case_scores['CTV_SeminalVes D_min'] = 'n/a'
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7400')
+                if 'PTVp_7400' in organ_dvhs:
+                    number_of_targets = number_of_targets + 3
+                    dvh = organ_dvhs['PTVp_7400']
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    d_max = np.max(dvh)
+                    case_scores['PTVp_7400 D_median'] = 1.0 - min(
+                        max(abs((prescribed_dose - d_median) * 100 / prescribed_dose / 1.0), 0.0), 1.0)
+                    # case_scores['PTVp_7400 D_min'] = 1.0 - min(max((prescribed_dose - d_min) * 100.0 /
+                    # prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_7400 D95'] = 1.0 - min(
+                        max((prescribed_dose - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_7400 D_max'] = 1.0 - min(
+                        max((d_max - prescribed_dose) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D95']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_max']
+                else:
+                    case_scores['PTVp_7400 D_median'] = 'n/a'
+                    case_scores['PTVp_7400 D95'] = 'n/a'
+                    case_scores['PTVp_7400 D_max'] = 'n/a'
 
-            if 'PTVp_7400' in organ_dvhs:
-                number_of_targets = number_of_targets + 3
-                dvh = organ_dvhs['PTVp_7400']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                d_max = np.max(dvh)
-                case_scores['PTVp_7400 D_median'] = 1 - min(
-                    max(abs((prescribed_dose - d_median) * 100.0 / prescribed_dose / 1.0), 0.0), 1.0)
-                # case_scores['PTVp_7400 D_min'] = 1.0 - min(max((prescribed_dose - d_min) * 100.0 /
-                # prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_7400 D95'] = 1.0 - min(
-                    max((prescribed_dose - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_7400 D_max'] = 1.0 - min(
-                    max((d_max - prescribed_dose) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D95']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_max']
-            else:
-                case_scores['PTVp_7400 D_median'] = 'n/a'
-                case_scores['PTVp_7400 D95'] = 'n/a'
-                case_scores['PTVp_7400 D_max'] = 'n/a'
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7100_dvh')
+                if 'PTVp_7100_dvh' in organ_dvhs:
+                    number_of_targets = number_of_targets + 2
+                    dvh = organ_dvhs['PTVp_7100_dvh']
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    case_scores['PTVp_7100 D_median'] = 1 - min(max((71 - d_median) * 100.0 / prescribed_dose / 1.0,
+                                                                    0.0), 1.0)
+                    # case_scores['PTVp_7100 D_min'] = 1 - min(max((71 - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_7100 D95'] = 1 - min(max((71 - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D95']
+                else:
+                    case_scores['PTVp_7100 D_median'] = 'n/a'
+                    case_scores['PTVp_7100 D95'] = 'n/a'
 
-            if 'PTVp_7100_dvh' in organ_dvhs:
-                number_of_targets = number_of_targets + 2
-                dvh = organ_dvhs['PTVp_7100_dvh']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                case_scores['PTVp_7100 D_median'] = 1.0 - min(max((71.0 - d_median) * 100.0 / prescribed_dose / 1.0,
-                                                                  0.0), 1.0)
-                # case_scores['PTVp_7100 D_min'] = 1 - min(max((71 - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_7100 D95'] = 1 - min(max((71 - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D95']
-            else:
-                case_scores['PTVp_7100 D_median'] = 'n/a'
-                case_scores['PTVp_7100 D95'] = 'n/a'
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_6000_dvh')
+                if 'PTVp_6000_dvh' in organ_dvhs:
+                    number_of_targets = number_of_targets + 2
+                    dvh = organ_dvhs['PTVp_6000_dvh']
+                    d_median = np.median(dvh)  # / 74.0 * 100.0
+                    # d_min = np.min(dvh)  # / 74.0 * 100.0
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    case_scores['PTVp_6000 D_median'] = 1 - min(max((60 - d_median) * 100.0 / prescribed_dose / 1.0,
+                                                                    0.0), 1.0)
+                    # case_scores['PTVp_6000 D_min'] = 1 - min(max((60 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['PTVp_6000 D95'] = 1 - min(max((60 - d_95) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D95']
+                else:
+                    case_scores['PTVp_6000 D_median'] = 'n/a'
+                    case_scores['PTVp_6000 D95'] = 'n/a'
 
-            if 'PTVp_6000_dvh' in organ_dvhs:
-                number_of_targets = number_of_targets + 2
-                dvh = organ_dvhs['PTVp_6000_dvh']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                case_scores['PTVp_6000 D_median'] = 1.0 - min(max((60.0 - d_median) * 100.0 / prescribed_dose /
-                                                                  1.0, 0.0), 1.0)
-                # case_scores['PTVp_6000 D_min'] = 1 - min(max((60 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['PTVp_6000 D95'] = 1 - min(max((60 - d_95) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D95']
-            else:
-                case_scores['PTVp_6000 D_median'] = 'n/a'
-                case_scores['PTVp_6000 D95'] = 'n/a'
+                # The final score should not depend on what is contoured. Either way the consensus will have all the
+                # target structures.
+                case_scores['Targets'] = case_scores['Targets'] * 50.0 / 9  # number_of_targets
 
-            if 'CTV_LN_Pelvic' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_LN_Pelvic']
-                d_min = np.min(dvh)
-                case_scores['CTV_LN_Pelvic D_min'] = 1.0 - min(max((60.0 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0),
-                                                         1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_LN_Pelvic D_min']
-            else:
-                case_scores['CTV_LN_Pelvic D_min'] = 'n/a'
+                if output_dvh_values:
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7400')
+                    dvh = organ_dvhs['PTVp_7400']
+                    case_scores['PTVp_7400 D_median'] = np.median(dvh)
+                    case_scores['PTVp_7400 D_min'] = np.min(dvh)
+                    case_scores['PTVp_7400 D_max'] = np.max(dvh)
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7100_dvh')
+                    dvh = organ_dvhs['PTVp_7100_dvh']
+                    case_scores['PTVp_7100 D_median'] = np.median(dvh)
+                    case_scores['PTVp_7100 D_min'] = np.min(dvh)
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_6000_dvh')
+                    dvh = organ_dvhs['PTVp_6000_dvh']
+                    case_scores['PTVp_6000 D_median'] = np.median(dvh)
+                    case_scores['PTVp_6000 D_min'] = np.min(dvh)
 
-            if 'PTVn_6000' in organ_dvhs:
-                number_of_targets = number_of_targets + 2
-                dvh = organ_dvhs['PTVn_6000']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                case_scores['PTVn_6000 D_median'] = 1.0 - min(
-                    max((60.0 - d_median) * 100.0 / prescribed_dose / 1.0, 0.0), 1.0)
-                # case_scores['PTVn_6000 D_min'] = 1.0 - min(max((60.0 - d_min) * 100.0 /
-                # prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['PTVn_6000 D95'] = 1.0 - min(max((60.0 - d_95) * 100.0 / prescribed_dose / 4.0, 0.0),
-                                                         1.0)
-                case_scores['PTVn_6000 D_median_value'] = d_median
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_6000 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_6000 D95']
-            else:
-                case_scores['PTVn_6000 D_median'] = 'n/a'
-                case_scores['PTVn_6000 D95'] = 'n/a'
+            elif case_number in self.case_numbers['Prostate + Nodes']:  # [2, 5, 7, 9, 12, 15]:  # Prostate + nodes
+                prescribed_dose = 74.0
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_Prostate')
+                if 'CTV_Prostate' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_Prostate']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_Prostate D_min'] = 1.0 - min(
+                        max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_Prostate D_min']
+                else:
+                    case_scores['CTV_Prostate D_min'] = 'n/a'
 
-            # The final score should not depend on what is contoured. Either way the consensus will have all the
-            # target structures.
-            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 12  # number_of_targets
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_SeminalVes')
+                if 'CTV_SeminalVes' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_SeminalVes']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_SeminalVes D_min'] = 1 - min(max((60 - d_min) * 100.0 /
+                                                                      prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_SeminalVes D_min']
+                else:
+                    case_scores['CTV_SeminalVes D_min'] = 'n/a'
 
-            if output_dvh_values:
-                dvh = organ_dvhs['PTVp_7400']
-                case_scores['PTVp_7400 D_median'] = np.median(dvh)
-                case_scores['PTVp_7400 D_min'] = np.min(dvh)
-                case_scores['PTVp_7400 D_max'] = np.max(dvh)
-                dvh = organ_dvhs['PTVp_7100_dvh']
-                case_scores['PTVp_7100 D_median'] = np.median(dvh)
-                case_scores['PTVp_7100 D_min'] = np.min(dvh)
-                dvh = organ_dvhs['PTVp_6000_dvh']
-                case_scores['PTVp_6000 D_median'] = np.median(dvh)
-                case_scores['PTVp_6000 D_min'] = np.min(dvh)
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7400')
+                if 'PTVp_7400' in organ_dvhs:
+                    number_of_targets = number_of_targets + 3
+                    dvh = organ_dvhs['PTVp_7400']
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    d_max = np.max(dvh)
+                    case_scores['PTVp_7400 D_median'] = 1 - min(
+                        max(abs((prescribed_dose - d_median) * 100.0 / prescribed_dose / 1.0), 0.0), 1.0)
+                    # case_scores['PTVp_7400 D_min'] = 1.0 - min(max((prescribed_dose - d_min) * 100.0 /
+                    # prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_7400 D95'] = 1.0 - min(
+                        max((prescribed_dose - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_7400 D_max'] = 1.0 - min(
+                        max((d_max - prescribed_dose) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D95']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7400 D_max']
+                else:
+                    case_scores['PTVp_7400 D_median'] = 'n/a'
+                    case_scores['PTVp_7400 D95'] = 'n/a'
+                    case_scores['PTVp_7400 D_max'] = 'n/a'
+
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7100_dvh')
+                if 'PTVp_7100_dvh' in organ_dvhs:
+                    number_of_targets = number_of_targets + 2
+                    dvh = organ_dvhs['PTVp_7100_dvh']
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    case_scores['PTVp_7100 D_median'] = 1.0 - min(max((71.0 - d_median) * 100.0 / prescribed_dose / 1.0,
+                                                                      0.0), 1.0)
+                    # case_scores['PTVp_7100 D_min'] = 1 - min(max((71 - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_7100 D95'] = 1 - min(max((71 - d_95) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_7100 D95']
+                else:
+                    case_scores['PTVp_7100 D_median'] = 'n/a'
+                    case_scores['PTVp_7100 D95'] = 'n/a'
+
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_6000_dvh')
+                if 'PTVp_6000_dvh' in organ_dvhs:
+                    number_of_targets = number_of_targets + 2
+                    dvh = organ_dvhs['PTVp_6000_dvh']
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    case_scores['PTVp_6000 D_median'] = 1.0 - min(max((60.0 - d_median) * 100.0 / prescribed_dose /
+                                                                      1.0, 0.0), 1.0)
+                    # case_scores['PTVp_6000 D_min'] = 1 - min(max((60 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['PTVp_6000 D95'] = 1 - min(max((60 - d_95) * 100.0 / prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6000 D95']
+                else:
+                    case_scores['PTVp_6000 D_median'] = 'n/a'
+                    case_scores['PTVp_6000 D95'] = 'n/a'
+
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_LN_Pelvic')
+                if 'CTV_LN_Pelvic' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_LN_Pelvic']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_LN_Pelvic D_min'] = 1.0 - min(max((60.0 - d_min) * 100.0 / prescribed_dose / 4.0, 0.0),
+                                                                   1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_LN_Pelvic D_min']
+                else:
+                    case_scores['CTV_LN_Pelvic D_min'] = 'n/a'
+
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVn_6000')
                 if 'PTVn_6000' in organ_dvhs:
+                    number_of_targets = number_of_targets + 2
                     dvh = organ_dvhs['PTVn_6000']
-                    case_scores['PTVn_6000 D_median'] = np.median(dvh)
-                    case_scores['PTVn_6000 D_min'] = np.min(dvh)
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    case_scores['PTVn_6000 D_median'] = 1.0 - min(
+                        max((60.0 - d_median) * 100.0 / prescribed_dose / 1.0, 0.0), 1.0)
+                    # case_scores['PTVn_6000 D_min'] = 1.0 - min(max((60.0 - d_min) * 100.0 /
+                    # prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['PTVn_6000 D95'] = 1.0 - min(max((60.0 - d_95) * 100.0 / prescribed_dose / 4.0, 0.0),
+                                                             1.0)
+                    case_scores['PTVn_6000 D_median_value'] = d_median
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_6000 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_6000 D95']
+                else:
+                    case_scores['PTVn_6000 D_median'] = 'n/a'
+                    case_scores['PTVn_6000 D95'] = 'n/a'
 
-        else:  # Prostate Bed + Nodes
-            prescribed_dose = 66.0
-            if 'CTV_ProstateBed' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_ProstateBed']
-                d_min = np.min(dvh)
-                case_scores['CTV_ProstateBED D_min'] = 1.0 - min(
-                    max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_ProstateBED D_min']
-            else:
-                case_scores['CTV_ProstateBed D_min'] = 'n/a'
+                # The final score should not depend on what is contoured. Either way the consensus will have all the
+                # target structures.
+                case_scores['Targets'] = case_scores['Targets'] * 50.0 / 12  # number_of_targets
 
-            if 'PTVp_6600' in organ_dvhs:
-                number_of_targets = number_of_targets + 3
-                dvh = organ_dvhs['PTVp_6600']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                d_max = np.max(dvh)
-                case_scores['PTVp_6600 D_median'] = 1.0 - min(
-                    max(abs((prescribed_dose - d_median) * 100.0 / prescribed_dose / 1.0), 0.0), 1.0)
-                # case_scores['PTVp_6600 D_min'] = 1.0 - min(max((prescribed_dose - d_min) * 100.0 /
-                # prescribed_dose / 5.0, 0.0), 1.0)
-                case_scores['PTVp_6600 D95'] = 1.0 - min(max((prescribed_dose - d_95) * 100.0 / prescribed_dose / 5.0,
-                                                             0.0), 1.0)
-                case_scores['PTVp_6600 D_max'] = 1.0 - min(
-                    max((d_max - prescribed_dose) * 100.0 / prescribed_dose / 5.0,
-                        0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6600 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6600 D95']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6600 D_max']
-            else:
-                case_scores['PTVp_6600 D_median'] = 'n/a'
-                case_scores['PTVp_6600 D95'] = 'n/a'
-                case_scores['PTVp_6600 D_max'] = 'n/a'
+                if output_dvh_values:
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7400')
+                    dvh = organ_dvhs['PTVp_7400']
+                    case_scores['PTVp_7400 D_median'] = np.median(dvh)
+                    case_scores['PTVp_7400 D_min'] = np.min(dvh)
+                    case_scores['PTVp_7400 D_max'] = np.max(dvh)
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_7100_dvh')
+                    dvh = organ_dvhs['PTVp_7100_dvh']
+                    case_scores['PTVp_7100 D_median'] = np.median(dvh)
+                    case_scores['PTVp_7100 D_min'] = np.min(dvh)
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_6000_dvh')
+                    dvh = organ_dvhs['PTVp_6000_dvh']
+                    case_scores['PTVp_6000 D_median'] = np.median(dvh)
+                    case_scores['PTVp_6000 D_min'] = np.min(dvh)
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVn_6000')
+                    if 'PTVn_6000' in organ_dvhs:
+                        dvh = organ_dvhs['PTVn_6000']
+                        case_scores['PTVn_6000 D_median'] = np.median(dvh)
+                        case_scores['PTVn_6000 D_min'] = np.min(dvh)
 
-            if 'CTV_LN_Pelvic' in organ_dvhs:
-                number_of_targets = number_of_targets + 1
-                dvh = organ_dvhs['CTV_LN_Pelvic']
-                d_min = np.min(dvh)
-                case_scores['CTV_LN_Pelvic D_min'] = 1.0 - min(max((50.0 - d_min) * 100.0 /
-                                                                   prescribed_dose / 4.0, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_LN_Pelvic D_min']
-            else:
-                case_scores['CTV_LN_Pelvic D_min'] = 'n/a'
+            else:  # Prostate Bed + Nodes
+                prescribed_dose = 66.0
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_ProstateBed')
+                if 'CTV_ProstateBed' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_ProstateBed']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_ProstateBED D_min'] = 1.0 - min(
+                        max((prescribed_dose - d_min) * 100.0 / prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_ProstateBED D_min']
+                else:
+                    case_scores['CTV_ProstateBed D_min'] = 'n/a'
 
-            if 'PTVn_5000' in organ_dvhs:
-                number_of_targets = number_of_targets + 2
-                dvh = organ_dvhs['PTVn_5000']
-                d_median = np.median(dvh)
-                # d_min = np.min(dvh)
-                # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
-                # this actually corresponds to the 5th percentile of the DVH
-                d_95 = np.percentile(dvh, 5.0)
-                case_scores['PTVn_5000 D_median'] = 1 - min(max((50.0 - d_median) * 100.0 / prescribed_dose / 1.0, 0.0),
-                                                            1.0)
-                # case_scores['PTVn_5000 D_min'] = 1 - min(max((50.0 - d_min) * 100.0 /
-                # prescribed_dose / 3.4, 0.0), 1.0)
-                case_scores['PTVn_5000 D95'] = 1 - min(max((50.0 - d_95) * 100.0 / prescribed_dose / 3.4, 0.0), 1.0)
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_5000 D_median']
-                case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_5000 D95']
-            else:
-                case_scores['PTVn_5000 D_median'] = 'n/a'
-                case_scores['PTVn_5000 D95'] = 'n/a'
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_6600')
+                if 'PTVp_6600' in organ_dvhs:
+                    number_of_targets = number_of_targets + 3
+                    dvh = organ_dvhs['PTVp_6600']
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    d_max = np.max(dvh)
+                    case_scores['PTVp_6600 D_median'] = 1.0 - min(
+                        max(abs((prescribed_dose - d_median) * 100.0 / prescribed_dose / 1.0), 0.0), 1.0)
+                    # case_scores['PTVp_6600 D_min'] = 1.0 - min(max((prescribed_dose - d_min) * 100.0 /
+                    # prescribed_dose / 5.0, 0.0), 1.0)
+                    case_scores['PTVp_6600 D95'] = 1.0 - min(max((prescribed_dose - d_95) * 100.0 / prescribed_dose / 5.0,
+                                                                 0.0), 1.0)
+                    case_scores['PTVp_6600 D_max'] = 1.0 - min(
+                        max((d_max - prescribed_dose) * 100.0 / prescribed_dose / 5.0,
+                            0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6600 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6600 D95']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVp_6600 D_max']
+                else:
+                    case_scores['PTVp_6600 D_median'] = 'n/a'
+                    case_scores['PTVp_6600 D95'] = 'n/a'
+                    case_scores['PTVp_6600 D_max'] = 'n/a'
 
-            # The final score should not depend on what is contoured. Either way the consensus will have all the
-            # target structures.
-            case_scores['Targets'] = case_scores['Targets'] * 50.0 / 7  # number_of_targets
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'CTV_LN_Pelvic')
+                if 'CTV_LN_Pelvic' in organ_dvhs:
+                    number_of_targets = number_of_targets + 1
+                    dvh = organ_dvhs['CTV_LN_Pelvic']
+                    d_min = np.min(dvh)
+                    case_scores['CTV_LN_Pelvic D_min'] = 1.0 - min(max((50.0 - d_min) * 100.0 /
+                                                                       prescribed_dose / 4.0, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['CTV_LN_Pelvic D_min']
+                else:
+                    case_scores['CTV_LN_Pelvic D_min'] = 'n/a'
 
-            if output_dvh_values:
-                dvh = organ_dvhs['PTVp_6600']
-                case_scores['PTVp_6600 D_median'] = np.median(dvh)
-                case_scores['PTVp_6600 D_min'] = np.min(dvh)
-                case_scores['PTVp_6600 D_max'] = np.max(dvh)
+                organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVn_5000')
                 if 'PTVn_5000' in organ_dvhs:
+                    number_of_targets = number_of_targets + 2
                     dvh = organ_dvhs['PTVn_5000']
-                    case_scores['PTVn_5000 D_median'] = np.median(dvh)
-                    case_scores['PTVn_5000 D_min'] = np.min(dvh)
+                    d_median = np.median(dvh)
+                    # d_min = np.min(dvh)
+                    # The D95 is dose for which 95% of the volume is higher, but since the DVH is sorted lowest to highest,
+                    # this actually corresponds to the 5th percentile of the DVH
+                    d_95 = np.percentile(dvh, 5.0)
+                    case_scores['PTVn_5000 D_median'] = 1 - min(max((50.0 - d_median) * 100.0 / prescribed_dose / 1.0, 0.0),
+                                                                1.0)
+                    # case_scores['PTVn_5000 D_min'] = 1 - min(max((50.0 - d_min) * 100.0 /
+                    # prescribed_dose / 3.4, 0.0), 1.0)
+                    case_scores['PTVn_5000 D95'] = 1 - min(max((50.0 - d_95) * 100.0 / prescribed_dose / 3.4, 0.0), 1.0)
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_5000 D_median']
+                    case_scores['Targets'] = case_scores['Targets'] + case_scores['PTVn_5000 D95']
+                else:
+                    case_scores['PTVn_5000 D_median'] = 'n/a'
+                    case_scores['PTVn_5000 D95'] = 'n/a'
 
-        case_scores['Overall'] = (case_scores['Targets'] + case_scores['OARs'])
+                # The final score should not depend on what is contoured. Either way the consensus will have all the
+                # target structures.
+                case_scores['Targets'] = case_scores['Targets'] * 50.0 / 7  # number_of_targets
 
-        # Get contour similarity scores
-        if contour_set >= 0:  # i.e. we don't calculate the APL of the test set against itself
-            test_rtstruct_file = self.test_cases[case_number]['rtstruct_file']
-            rtstruct_file_choice = "rtstruct_file_" + str(contour_set)
-            reference_rtstruct_file = self.ground_truth_cases[case_number][rtstruct_file_choice]
+                if output_dvh_values:
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVp_6600')
+                    dvh = organ_dvhs['PTVp_6600']
+                    case_scores['PTVp_6600 D_median'] = np.median(dvh)
+                    case_scores['PTVp_6600 D_min'] = np.min(dvh)
+                    case_scores['PTVp_6600 D_max'] = np.max(dvh)
+                    organ_dvhs = get_dvhs(resampled_dose, gt_structs, 'PTVn_5000')
+                    if 'PTVn_5000' in organ_dvhs:
+                        dvh = organ_dvhs['PTVn_5000']
+                        case_scores['PTVn_5000 D_median'] = np.median(dvh)
+                        case_scores['PTVn_5000 D_min'] = np.min(dvh)
 
-            if (reference_rtstruct_file != "") & (test_rtstruct_file != ""):
-                consensus_contour_results = score_autocontours_lib.score_a_case(reference_rtstruct_file,
-                                                                                test_rtstruct_file,
-                                                                                use_roi_name=True,
-                                                                                dictionary_file=self.dictionary)
-                for contour_similarity_result in consensus_contour_results:
-                    field_name = contour_similarity_result['RefOrgan'] + " NAPL"
-                    case_scores[field_name] = contour_similarity_result['APL'] / contour_similarity_result['ref_length']
+            case_scores['Overall'] = (case_scores['Targets'] + case_scores['OARs'])
+
+            # Get contour similarity scores
+            if contour_set >= 0:  # i.e. we don't calculate the APL of the test set against itself
+                test_rtstruct_file = self.test_cases[case_number]['rtstruct_file']
+                rtstruct_file_choice = "rtstruct_file_" + str(contour_set)
+                reference_rtstruct_file = self.ground_truth_cases[case_number][rtstruct_file_choice]
+
+                if (reference_rtstruct_file != "") & (test_rtstruct_file != ""):
+                    consensus_contour_results = score_autocontours_lib.score_a_case(reference_rtstruct_file,
+                                                                                    test_rtstruct_file,
+                                                                                    use_roi_name=True,
+                                                                                    dictionary_file=self.dictionary)
+                    for contour_similarity_result in consensus_contour_results:
+                        field_name = contour_similarity_result['RefOrgan'] + " NAPL"
+                        case_scores[field_name] = contour_similarity_result['APL'] / contour_similarity_result['ref_length']
+        else:
+            case_scores['OARs'] = 'n/a'
+            case_scores['Targets'] = 'n/a'
+            case_scores['Overall'] = 'n/a'
 
         return case_scores
 
@@ -1103,7 +1183,10 @@ class Autortp:
                     rtstruct_file_choice = "rtstruct_file_" + str(expert)
                     rtstruct_file = self.ground_truth_cases[case_number][rtstruct_file_choice]
 
-        rtstruct_data = pydcm.filereader.dcmread(rtstruct_file)
+        if os.path.exists(rtstruct_file):
+            rtstruct_data = pydcm.filereader.dcmread(rtstruct_file)
+        else:
+            return None
 
         # Rename the structures using the dictionary so that we can process them more robustly
         # They should be correct anyway since they are our ground truth, but "just in case"

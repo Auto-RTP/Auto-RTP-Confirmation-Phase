@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 SCRIPTPATH="$( cd "$(dirname "$0")" ; pwd -P )"
 
 ./build.sh
@@ -22,6 +23,6 @@ docker run --rm \
 
 docker run --rm \
         -v autortp-output-$VOLUME_SUFFIX:/output/ \
-        python:3.9-slim cat /output/metrics.json | python3 -m json.tool
+        python:3.9-slim cat /output/metrics.json | python -m json.tool
 
 docker volume rm autortp-output-$VOLUME_SUFFIX
